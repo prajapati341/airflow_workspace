@@ -25,11 +25,12 @@ default_arg={
 }
 
 
+
 @task()
 def get_data_mysql():
 
         print('test')
-        sql_script="""select * from stock_data_interval limit 10"""
+        sql_script="""select * from stock_data_interval limit 10000"""
         hook = MySqlHook(mysql_conn_id="MySQL_Server_Ubuntu")
         df = hook.get_pandas_df(sql=sql_script)
         #print(df)
@@ -37,18 +38,24 @@ def get_data_mysql():
 
 
 @task()
-def insert_into_mssql(get_df):
+def insert_copy_df_mysql(get_df):
+        conn = BaseHook.get_connection('MySQL_Server_Ubuntu_Test_db')
+        #engine = create_engine(f'postgresql://{conn.login}:{conn.password}@{conn.host}:{conn.port}/{conn.schema}')
+        engine = create_engine(f'mysql://{conn.login}:{conn.password}@{conn.host}:{conn.port}/{conn.schema}')
+        #print(engine.connect())
+        get_df.to_sql('import_table',engine,if_exists='replace',index=False)
+
+
+
+
+@task()
+def insert_into_mssql(get_df):     # get data from task function() get_data_mysql()
 
         
         conn=BaseHook.get_connection('SQL_Server_window_remote')
         engine=create_engine(f'mssql+pyodbc://{conn.login}:{conn.password}@{conn.host}:{conn.port}/{conn.schema}?driver=ODBC Driver 17 for SQL Server')
-        #engine = sa.create_engine("mssql+pyodbc://sa_window:1234@192.168.0.105:1433/Test?driver=ODBC Driver 17 for SQL Server")
-
-        #print(type(get_df))
-        get_df.to_sql('import_table',engine,if_exists='replace',index=False,chunksize=500 )
-        # print(engine.connect())
-        # if engine.connect():
-        #         print('connection successful')
+        get_df.to_sql('import_table',engine,if_exists='replace',index=False)
+        
 
 @task()
 def replicate_table_mssql():
@@ -58,31 +65,32 @@ def replicate_table_mssql():
 
         get_conn=engine.connect()
         result=get_conn.execute('select * from import_table with (nolock)')
+        
         df=pd.DataFrame(result)
         
         df.to_sql('import_table2',engine,if_exists='replace',index=False)
 
+        
 
-with DAG(dag_id="etl1",default_args=default_arg,schedule_interval="0 9 * * *", start_date=datetime(2023, 7, 9),catchup=False,  tags=["product_model"]) as dag:
+
+
+
+        
+
+
+with DAG(dag_id="ETL_with_Mailing",default_args=default_arg,schedule_interval="0 9 * * *", start_date=datetime(2023, 7, 9),catchup=False,  tags=["product_model"]) as dag:
+
         with TaskGroup('get_data_from_mysql',tooltip='Extract Data from mysql server') as task_extract_data:
                 source_data=get_data_mysql()
                 load_data=insert_into_mssql(source_data)
+                load_data_copy=insert_copy_df_mysql(source_data)
+                source_data >> load_data_copy
                 source_data >> load_data
                 
                 
 
         with TaskGroup('replicate_tables',tooltip='Extract Data from') as replicate_table_task:
                 replicate_table=replicate_table_mssql()
-                
-                #source_data >> load_data
-
-                # send_mail=EmailOperator(
-                #         task_id='EndTaskMail',
-                #         to='prajapati341@gmail.com',
-                #         subject='subject airflow test',
-                #         html_content='''<h1>demo airflow mail</h1>'''
-                # )
-
                 replicate_table
 
         with TaskGroup('sending_mails',tooltip='send all mails') as send_mail_group_task:
@@ -90,8 +98,8 @@ with DAG(dag_id="etl1",default_args=default_arg,schedule_interval="0 9 * * *", s
                 send_mail=EmailOperator(
                         task_id='EndTaskMail',
                         to='prajapati341@gmail.com',
-                        subject='subject airflow test',
-                        html_content='''<h1>demo airflow mail</h1>'''
+                        subject='Airflow test mail',
+                        html_content=f'''<h1>ETL Transaction Successfully done 1000 records</h1>'''
                 )
                 send_mail
         
